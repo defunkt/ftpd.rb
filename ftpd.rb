@@ -44,6 +44,12 @@ class FTPServer < TCPServer
   def initialize(config)
     host = config[:host]
     port = config[:port]
+
+    @config  = config
+    @logger  = Logger.new(STDOUT)
+    @logger.progname = "ftpd.rb"
+    @logger.level = config[:debug] ? Logger::DEBUG : Logger::ERROR
+    @threads = []
     
     begin
       server = super(host, port)
@@ -52,12 +58,6 @@ class FTPServer < TCPServer
       return
     end
     
-    @config  = config
-    @logger  = Logger.new(STDOUT)
-    @logger.progname = "ftpd.rb"
-    @logger.level = config[:debug] ? Logger::DEBUG : Logger::ERROR
-    @threads = []
-    @active  = 0
     @status  = :alive
 
     notice "Server started successfully at ftp://#{host}:#{port} " + \

@@ -2,7 +2,7 @@
 ## ftpd.rb
 ## a simple ruby ftp server
 #
-# version: 0.1 (2006-01-21)
+# version: 2 (2006-02-02)
 #
 # author:  chris wanstrath // chris@ozmm.org
 # site:    http://rubyforge.org/projects/ftpd/
@@ -30,7 +30,7 @@ Thread.abort_on_exception = true
 class FTPServer < TCPServer
 
   PROGRAM      = "ftpd.rb"  
-  VERSION      = 0.1
+  VERSION      = 2
   AUTHOR       = "Chris Wanstrath"
   AUTHOR_EMAIL = "chris@ozmm.org"
   

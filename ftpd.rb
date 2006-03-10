@@ -108,7 +108,7 @@ class FTPServer < TCPServer
       remote_port, remote_ip = info[1], info[3]
       thread[:addr]  = [remote_ip, remote_port]
       debug "Got connection"
-      response "200 #{@config[:host]}:#{@config[:port]} FTP server "\
+      response "200 #{@config[:host]}:#{@config[:port]} FTP server " \
                "(#{PROGRAM}) ready."
       while socket.nil? == false and socket.closed? == false
         request = socket.gets
@@ -154,15 +154,14 @@ class FTPServer < TCPServer
     Thread.new do
       loop do
         @threads.delete_if do |t|
-          if Time.now - t[:stamp] > 10
+          if Time.now - t[:stamp] > 400
             t[:socket].close
             t.kill
-            info %[killed thread]
+            debug "Killed inactive connection."
             true
           end
         end
-        info show_threads
-        sleep 5
+        sleep 20
       end
     end    
   end

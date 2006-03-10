@@ -216,7 +216,7 @@ class FTPServer < TCPServer
   
   # login
   def user(msg)
-#    return "502 Only anonymous user implemented" if msg != 'anonymous'
+    return "502 Only anonymous user implemented" if msg != 'anonymous'
     debug "User #{msg} logged in."
     thread[:user] = msg
     "230 OK, password not required"
@@ -344,7 +344,6 @@ class FTPServer < TCPServer
     elsif msg == "I"
       thread[:mode] == :binary  
       "200 Type set to binary"
-#      "502 Binary mode not yet implemented"
     end
   end
   

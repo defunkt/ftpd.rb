@@ -2,7 +2,7 @@
 ## ftpd.rb
 ## a simple ruby ftp server
 #
-# version: 2 (2006-02-02)
+# version: 3 (2006-03-10)
 #
 # author:  chris wanstrath // chris@ozmm.org
 # site:    http://rubyforge.org/projects/ftpd/
@@ -20,25 +20,22 @@
 #  $ ruby ftpd.rb --help
 #
 
-require 'socket'
-require 'logger'
-require 'optparse'
-require 'yaml'
+%w[socket logger optparse yaml].each { |f| require f }
 
 Thread.abort_on_exception = true
 
 class FTPServer < TCPServer
 
   PROGRAM      = "ftpd.rb"  
-  VERSION      = 2
+  VERSION      = 3
   AUTHOR       = "Chris Wanstrath"
   AUTHOR_EMAIL = "chris@ozmm.org"
   
   LBRK = "\r\n" # ftp protocol says this is a line break
   
   # commands supported
-  COMMANDS = %w[QUIT TYPE USER RETR STOR PORT CDUP CWD DELE RMD PWD LIST SIZE
-                SYST SITE MKD]
+  COMMANDS = %w[quit type user retr stor port cdup cwd dele rmd pwd list size
+                syst site mkd]
   
   # setup a TCPServer instance and house our main loop
   def initialize(config)
@@ -47,6 +44,7 @@ class FTPServer < TCPServer
 
     @config  = config
     @logger  = Logger.new(STDOUT)
+    @logger.datetime_format = "%H:%M:%S"
     @logger.progname = "ftpd.rb"
     @logger.level = config[:debug] ? Logger::DEBUG : Logger::ERROR
     @threads = []
@@ -60,43 +58,36 @@ class FTPServer < TCPServer
     
     @status  = :alive
 
-    notice "Server started successfully at ftp://#{host}:#{port} " + \
+    notice "Server started successfully at ftp://#{host}:#{port} " << \
               "[PID: #{Process.pid}]"
+    
+    # periodically check for inactive connections and kill them
+    kill_dead_connections
     
     while (@status == :alive)
       begin
-        sock = server.accept
+        socket  = server.accept
         clients = 0
         @threads.each { |t| clients += 1 if t.alive? }
         if clients >= @config[:clients]
-          sock.print "530 Too many connections" + LBRK
-          sock.close
+          socket.print "530 Too many connections" << LBRK
+          socket.close
         else
-          @threads << Thread.new(sock) do |socket|
-            Thread.current[:socket] = socket
-            Thread.current[:mode]   = :binary
-            info = socket.peeraddr
-            remote_port, remote_ip = info[1], info[3]
-            Thread.current[:addr]  = [remote_ip, remote_port]
-            debug "Got connection"
-            response "200 #{host}:#{port} FTP server (#{PROGRAM}) ready."
-            while socket.nil? == false and socket.closed? == false
-              request = socket.gets
-              response handler(request)
-            end
-          end
+          @threads << threaded_connection(socket)
         end
       rescue Interrupt
         @status = :dead
       rescue Exception => ex
         @status = :dead
+        request ||= 'No request'
         fatal "#{ex.class}: #{ex.message} - #{request}\n\t#{ex.backtrace[0]}"
       end
     end
     
     notice "Shutting server down..."
     
-    # clean up anything we've still got open
+    # clean up anything we've still got open - a simple join won't work because
+    # we may still have open sockets, which we need to terminate
     @threads.each do |t|
       next if t.alive? == false
       sk = t[:socket]
@@ -109,21 +100,44 @@ class FTPServer < TCPServer
   
   private
   
+  def threaded_connection(sock)
+    Thread.new(sock) do |socket|
+      thread[:socket] = socket
+      thread[:mode]   = :binary
+      info = socket.peeraddr
+      remote_port, remote_ip = info[1], info[3]
+      thread[:addr]  = [remote_ip, remote_port]
+      debug "Got connection"
+      response "200 #{@config[:host]}:#{@config[:port]} FTP server "\
+               "(#{PROGRAM}) ready."
+      while socket.nil? == false and socket.closed? == false
+        request = socket.gets
+        response handler(request)
+      end
+    end    
+  end
+  
   # send a message to the client
   def response(msg)
-    sock = Thread.current[:socket]
-    sock.print msg + LBRK unless msg.nil? or sock.nil? or sock.closed?
+    sock = thread[:socket]
+    sock.print msg << LBRK unless msg.nil? or sock.nil? or sock.closed?
   end
   
   # deals with the user input
   def handler(request)
+    stamp!
     return if request.nil? or request.to_s == ''
     begin
       command = request[0,4].downcase.strip
       rqarray = request.split
       message = rqarray.length > 2 ? rqarray[1..rqarray.length] : rqarray[1]
       debug "Request: #{command}(#{message})"
-      __send__ command, message
+      case command
+        when *COMMANDS
+          __send__ command, message
+        else
+          bad_command command, message
+      end
     rescue Errno::EACCES, Errno::EPERM
       "553 Permission denied"
     rescue Errno::ENOENT
@@ -135,11 +149,35 @@ class FTPServer < TCPServer
     end
   end
   
+  # periodically kill inactive connections
+  def kill_dead_connections
+    Thread.new do
+      loop do
+        @threads.delete_if do |t|
+          if Time.now - t[:stamp] > 10
+            t[:socket].close
+            t.kill
+            info %[killed thread]
+            true
+          end
+        end
+        info show_threads
+        sleep 5
+      end
+    end    
+  end
+  
+  # set a timestamp (user's last action)
+  def stamp!; thread[:stamp] = Time.now end  
+  
+  # Thread.current wrapper
+  def thread; Thread.current end
+  
   #
   # logging functions
   #
   def debug(msg)
-    @logger.debug("#{remote_addr} - #{msg} (threads: #{show_threads})")
+    @logger.debug "#{remote_addr} - #{msg} (threads: #{show_threads})"
   end
   
   # a bunch of wrappers for Logger methods
@@ -148,10 +186,10 @@ class FTPServer < TCPServer
   end
   
   # always show
-  def notice(msg); STDOUT << "=> #{msg}\n"; end;
+  def notice(msg) STDOUT << "=> #{msg}\n" end
   
   # where the user's from
-  def remote_addr; Thread.current[:addr].join(':'); end
+  def remote_addr; thread[:addr].join(':') end
   
   # thread count
   def show_threads
@@ -161,10 +199,10 @@ class FTPServer < TCPServer
   end
   
   # command not understood
-  def method_missing(name, *params)
+  def bad_command(name, *params)
     arg = (params.is_a? Array) ? params.join(' ') : params
     if @config[:debug]
-      "500 I don't understand " + name.to_s + "(" + arg + ")"
+      "500 I don't understand " << name.to_s << "(" << arg << ")"
     else
       "500 Sorry, I don't understand #{name.to_s}"
     end
@@ -179,9 +217,9 @@ class FTPServer < TCPServer
   
   # login
   def user(msg)
-    return "502 Only anonymous user implemented" if msg != 'anonymous'
+#    return "502 Only anonymous user implemented" if msg != 'anonymous'
     debug "User #{msg} logged in."
-    Thread.current[:user] = msg
+    thread[:user] = msg
     "230 OK, password not required"
   end
   
@@ -190,11 +228,11 @@ class FTPServer < TCPServer
     nums = msg.split(',')
     port = nums[4].to_i * 256 + nums[5].to_i
     host = nums[0..3].join('.')
-    if Thread.current[:datasocket]
-      Thread.current[:datasocket].close
-      Thread.current[:datasocket] = nil
+    if thread[:datasocket]
+      thread[:datasocket].close
+      thread[:datasocket] = nil
     end
-    Thread.current[:datasocket] = TCPSocket.new(host, port)
+    thread[:datasocket] = TCPSocket.new(host, port)
     debug "Opened passive connection at #{host}:#{port}"
     "200 Passive connection established (#{port})"
   end
@@ -207,7 +245,7 @@ class FTPServer < TCPServer
   # retrieve a file
   def retr(msg)
     response "125 Data transfer starting"
-    send_data(File.new(msg, 'r'))
+    bytes = send_data(File.new(msg, 'r'))
     "226 Closing data connection, sent #{bytes} bytes"      
   end
   
@@ -215,19 +253,19 @@ class FTPServer < TCPServer
   def stor(msg)
     file = File.new(msg, 'w')
     response "125 Data transfer starting"
-    data = Thread.current[:datasocket].recv(1024)
+    data = thread[:datasocket].recv(1024)
     bytes = data.length
     file.write data
-    debug "#{Thread.current[:user]} created file #{Dir::pwd}/#{msg}"
+    debug "#{thread[:user]} created file #{Dir::pwd}/#{msg}"
     "200 OK, received #{bytes} bytes"    
   end
   
   # make directory
   def mkd(msg)
-    return "521 \"#{msg}\" already exists" if File.directory? msg
+    return %[521 "#{msg}" already exists] if File.directory? msg
     Dir::mkdir(msg)
-    debug "#{Thread.current[:user]} created directory #{Dir::pwd}/#{msg}"
-    "257 \"#{msg}\" created"
+    debug %[#{thread[:user]} created directory #{Dir::pwd}/#{msg}"
+    "257 "#{msg}" created]
   end
   
   # crazy site command
@@ -251,7 +289,7 @@ class FTPServer < TCPServer
     elsif File.file? msg
       File::delete msg
     end
-    debug "#{Thread.current[:user]} deleted #{Dir::pwd}/#{msg}"
+    debug "#{thread[:user]} deleted #{Dir::pwd}/#{msg}"
     "200 OK, deleted #{msg}"
   end
   
@@ -269,7 +307,7 @@ class FTPServer < TCPServer
   # list files in current directory
   def list(msg)
     response "125 Opening ASCII mode data connection for file list"
-    send_data(`ls -l`.split("\n").join(LBRK) + LBRK)
+    send_data(`ls -l`.split("\n").join(LBRK) << LBRK)
     "226 Transfer complete"
   end
   
@@ -280,7 +318,7 @@ class FTPServer < TCPServer
   
   # print the current directory
   def pwd(msg)
-    "257 \"#{Dir.pwd}\" is the current directory"
+    %[257 "#{Dir.pwd}" is the current directory]
   end
   
   # change directory
@@ -290,7 +328,7 @@ class FTPServer < TCPServer
     rescue Errno::ENOENT
       "550 Directory not found"
     else 
-      "250 Directory changed to " + Dir.pwd
+      "250 Directory changed to " << Dir.pwd
     end
   end
   
@@ -302,20 +340,20 @@ class FTPServer < TCPServer
   # ascii / binary mode
   def type(msg)
     if msg == "A"
-       Thread.current[:mode] == :ascii
+       thread[:mode] == :ascii
       "200 Type set to ASCII"
     elsif msg == "I"
-      Thread.current[:mode] == :binary  
-#      "200 Type set to binary"
-      "502 Binary mode not yet implemented"
+      thread[:mode] == :binary  
+      "200 Type set to binary"
+#      "502 Binary mode not yet implemented"
     end
   end
   
   # quit the ftp session
   def quit(msg = false)
-    Thread.current[:socket].close
-    Thread.current[:socket] = nil
-    debug "User #{Thread.current[:user]} disconnected."
+    thread[:socket].close
+    thread[:socket] = nil
+    debug "User #{thread[:user]} disconnected."
     "221 Laterz"
   end
   
@@ -330,7 +368,7 @@ class FTPServer < TCPServer
     commands.each do |c|
       str += "#{c}"
       str += "\t\t"
-      str += LBRK + "  " if (i % 3) == 0      
+      str += LBRK << "  " if (i % 3) == 0      
       i   += 1
     end
     response str
@@ -346,18 +384,23 @@ class FTPServer < TCPServer
     begin
       # this is where we do ascii / binary modes, if we ever get that far
       data.each do |line|
-        Thread.current[:datasocket].send(line, 0)
+        if thread[:mode] == :binary
+          thread[:datasocket].syswrite(line)
+        else
+          thread[:datasocket].send(line, 0)
+        end
         bytes += line.length
       end
     rescue Errno::EPIPE
-      debug "#{Thread.current[:user]} aborted file transfer"  
+      debug "#{thread[:user]} aborted file transfer"  
       return quit
     else
-      debug "#{Thread.current[:user]} got #{bytes} bytes"
+      debug "#{thread[:user]} got #{bytes} bytes"
     ensure
-      Thread.current[:datasocket].close
-      Thread.current[:datasocket] = nil    
+      thread[:datasocket].close
+      thread[:datasocket] = nil    
     end
+    bytes
   end
 
   #
@@ -394,7 +437,7 @@ class FTPConfig
       opts.separator "Specific options:"
 
       opts.on("-h", "--host HOST", 
-              "The hostname or ip of the host to bind to " + \
+              "The hostname or ip of the host to bind to " << \
               "(default 127.0.0.1)") do |host|
         config[:host] = host
       end
@@ -464,8 +507,6 @@ if $0 == __FILE__
   # now fill in missing config options from the default set
   config[:d].each { |k,v| config[k.to_sym] ||= v }
 
-  #
   # run the daemon
-  #
   server = FTPServer.new(config)
 end

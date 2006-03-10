@@ -2,7 +2,7 @@
 ## ftpd.rb
 ## a simple ruby ftp server
 #
-# version: 3 (2006-03-10)
+# version: 3 (2006-03-09)
 #
 # author:  chris wanstrath // chris@ozmm.org
 # site:    http://rubyforge.org/projects/ftpd/

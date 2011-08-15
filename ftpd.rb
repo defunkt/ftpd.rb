@@ -5,7 +5,7 @@
 # version: 3 (2006-03-09)
 #
 # author:  chris wanstrath // chris@ozmm.org
-# site:    http://rubyforge.org/projects/ftpd/
+# site:    http://github.com/defunkt/ftpd.rb
 #
 # license: MIT License // http://www.opensource.org/licenses/mit-license.php
 # copyright: (c) two thousand six chris wanstrath
